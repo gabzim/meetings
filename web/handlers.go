@@ -2,8 +2,10 @@ package web
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"net/http/httputil"
+	"time"
 )
 
 const (
@@ -25,4 +27,35 @@ func PhonePickedUpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/xml")
 
 	fmt.Fprint(w, greet)
+}
+
+type CalendarPushNotification struct {
+	ChannelExpiration *time.Time
+	ChannelId         string
+	MessageNumber     string
+	ResourceId        string
+	ResourceState     string
+	ResourceUri       string
+}
+
+func CalendarNotifications(notifications chan<- *CalendarPushNotification) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		channelExpiration := r.Header.Get("X-Goog-Channel-Expiration")
+		channelExpirationTime, err := time.Parse(time.RFC1123, channelExpiration)
+		if err != nil {
+			log.Errorf("Could not parse channel expiration time %v", err)
+		}
+		pushNotification := &CalendarPushNotification{
+			ResourceId:        r.Header.Get("X-Goog-Resource-Id"),
+			ChannelExpiration: &channelExpirationTime,
+			ChannelId:         r.Header.Get("X-Goog-Channel-Id"),
+			MessageNumber:     r.Header.Get("X-Goog-Message-Number"),
+			ResourceState:     r.Header.Get("X-Goog-Resource-State"),
+			ResourceUri:       r.Header.Get("X-Goog-Resource-Uri"),
+		}
+
+		notifications <- pushNotification
+	})
 }

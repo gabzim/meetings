@@ -13,8 +13,11 @@ import (
 	"os"
 )
 
-func GetCalendarClient() (*calendar.Service, error) {
-	cred, err := ioutil.ReadFile("credentials.json")
+//Code in this file copied from google tutorial, don't judge me for this
+
+//GetCalendarClient creates a google calendar client using credentials.json
+func GetCalendarClient(pathToCredentials string) (*calendar.Service, error) {
+	cred, err := ioutil.ReadFile(pathToCredentials)
 
 	if err != nil {
 		panic(err)
@@ -36,7 +39,7 @@ func GetClient(config *oauth2.Config) *http.Client {
 	// The file token.json stores the user's access and refresh tokens, and is
 	// created automatically when the authorization flow completes for the first
 	// time.
-	tokFile := "token.json"
+	tokFile := "./token.json"
 	tok, err := tokenFromFile(tokFile)
 	if err != nil {
 		tok = getTokenFromWeb(config)

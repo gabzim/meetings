@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/sfreiberg/gotwilio"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/calendar/v3"
@@ -28,8 +27,15 @@ type Config struct {
 	CallbackUrl       string
 }
 
+func init() {
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+}
+
+var config Config
+
 func main() {
-	var config Config
 	ReadConfig(&config)
 
 	twilio := gotwilio.NewTwilioClient(config.TwilioAccountSid, config.TwilioAuthToken)
@@ -38,27 +44,39 @@ func main() {
 		panic(err)
 	}
 
-	pushNotificationsHook, err := createCalendarPushNotificationHook(service, config.ApiEndpoint)
+	// Ask gCalendar to start pushing calendar updates to our endpoint
+	pushNotificationsHook := gcal.NewCalendarWebHookManaged(service, config.ApiEndpoint)
+
+	err = pushNotificationsHook.Start()
 	if err != nil {
 		panic(err)
 	}
-	log.WithField("expires", time.Unix(pushNotificationsHook.Expiration/1000, 0)).Infof("Started channel %v \n", pushNotificationsHook.Id)
 
 	pushNotifications := make(chan *web.CalendarPushNotification)
-	events := make(chan *calendar.Event)
+	events := make(chan *calendar.Event, 250)
 	eventStartingNotifications := make(chan *calendar.Event)
 
-	// every time a push notification arrives, fetch calendar events and push them to the events channel
-	go handlePushNotifications(service, pushNotifications, events)
+	// every time a push notification arrives: retrieve updated calendar events and push them to the events channel
+	go func() {
+		var syncToken string
+		for pushNotification := range pushNotifications {
+			if pushNotification.ResourceState == "sync" {
+				syncToken = ""
+			}
+			// passing in syncToken means that the query will only retrieve deltas since the last query
+			// if it's empty so we retrieve all events for the coming week
+			fetchUpdatedEvents(service, events, &syncToken)
+		}
+	}()
 
 	//take events coming in and, WHEN THEY'RE ABOUT TO START, push them to eventStartingNotifications
-	go gcal.NotifyEventStarting(context.Background(), events, eventStartingNotifications)
+	gcal.NotifyEventStarting(context.Background(), events, eventStartingNotifications)
 
-	// handles making the phone calls when an event is about to start
+	// when an event is about to start, call phone
 	go func() {
-		for event := range eventStartingNotifications {
+		for startingEvent := range eventStartingNotifications {
 			makePhoneCall(twilio, config.CallFromNumber, config.PhoneNumber, config.CallbackUrl)
-			log.WithFields(log.Fields{"event": event.Summary}).Printf("Calling %v now...", config.PhoneNumber)
+			log.WithFields(log.Fields{"startingEvent": startingEvent.Summary}).Printf("Calling %v now...", config.PhoneNumber)
 		}
 	}()
 
@@ -68,12 +86,7 @@ func main() {
 	go func() {
 		<-signals
 		log.Warn("Closing push notification channel before exit...")
-		err := service.Channels.Stop(pushNotificationsHook).Do()
-		if err != nil {
-			log.Errorf("Could not stop channel %v", pushNotificationsHook.Id)
-		} else {
-			log.Infof("Stopped channel %v \n", pushNotificationsHook.Id)
-		}
+		pushNotificationsHook.Stop()
 		os.Exit(0)
 	}()
 
@@ -85,23 +98,19 @@ func main() {
 	}
 }
 
-func handlePushNotifications(service *calendar.Service, notifications <-chan *web.CalendarPushNotification, events chan<- *calendar.Event) {
+// fetchUpdatedEvents retrieves events from the calendar, if syncToken is passed, only deltas from the last query will be retrieved
+// it then sets the value of syncToken to what the google calendar returned
+func fetchUpdatedEvents(service *calendar.Service, events chan<- *calendar.Event, syncToken *string) {
 	nextWeek := time.Now().Add(7 * 24 * time.Hour)
-	var syncToken string
-	for pushNotification := range notifications {
-		if pushNotification.ResourceState == "sync" {
-			syncToken = ""
-		}
-		// passing in syncToken means that the query will only retrieve deltas since the last query,
-		// the first time it's empty so we retrieve all events for the coming week
-		upcomingEvents, err := getCalendarEvents(service, nextWeek, syncToken)
-		if err != nil {
-			panic(err)
-		}
-		syncToken = upcomingEvents.NextSyncToken
-		for _, event := range upcomingEvents.Items {
-			events <- event
-		}
+	upcomingEvents, err := getCalendarEvents(service, nextWeek, *syncToken)
+	if err != nil {
+		log.Errorf("Could not retrieve upcoming events: %v", err)
+	}
+
+	*syncToken = upcomingEvents.NextSyncToken
+
+	for _, event := range upcomingEvents.Items {
+		events <- event
 	}
 }
 
@@ -124,6 +133,9 @@ func getCalendarEvents(service *calendar.Service, to time.Time, syncToken string
 	}
 
 	sort.Slice(events.Items, func(i, j int) bool {
+		if events.Items[i].Start == nil || events.Items[j].Start == nil {
+			return false
+		}
 		return events.Items[i].Start.DateTime < events.Items[j].Start.DateTime
 	})
 
@@ -138,22 +150,6 @@ func makePhoneCall(twilio *gotwilio.Twilio, from, to, callbackUrl string) (*gotw
 		return nil, nil, fmt.Errorf("error making phone call %v", err)
 	}
 	return call, ex, nil
-}
-
-// createCalendarPushNotificationHook tells Google Calendar to post calendar update notifications to the URL you pass in
-func createCalendarPushNotificationHook(service *calendar.Service, url string) (*calendar.Channel, error) {
-	channel := &calendar.Channel{
-		Id:      uuid.New().String(),
-		Address: url,
-		Type:    "web_hook",
-	}
-
-	createdChannel, err := service.Events.Watch("primary", channel).Do()
-	if err != nil {
-		return nil, err
-	}
-
-	return createdChannel, nil
 }
 
 func ReadConfig(config *Config) {

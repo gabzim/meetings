@@ -42,15 +42,19 @@ func CalendarNotifications(notifications chan<- *CalendarPushNotification) http.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
-		channelExpiration := r.Header.Get("X-Goog-Channel-Expiration")
-		channelExpirationTime, err := time.Parse(time.RFC1123, channelExpiration)
-		if err != nil {
-			log.Errorf("Could not parse channel expiration time %v", err)
+		channelExpiration := r.Header.Get("X-Goog-webhook-Expiration")
+		var channelExpirationTime *time.Time
+		if channelExpiration != "" {
+			t, err := time.Parse(time.RFC1123, channelExpiration)
+			if err != nil {
+				log.Errorf("Could not parse channel expiration time %v", err)
+			}
+			channelExpirationTime = &t
 		}
 		pushNotification := &CalendarPushNotification{
 			ResourceId:        r.Header.Get("X-Goog-Resource-Id"),
-			ChannelExpiration: &channelExpirationTime,
-			ChannelId:         r.Header.Get("X-Goog-Channel-Id"),
+			ChannelExpiration: channelExpirationTime,
+			ChannelId:         r.Header.Get("X-Goog-webhook-Id"),
 			MessageNumber:     r.Header.Get("X-Goog-Message-Number"),
 			ResourceState:     r.Header.Get("X-Goog-Resource-State"),
 			ResourceUri:       r.Header.Get("X-Goog-Resource-Uri"),

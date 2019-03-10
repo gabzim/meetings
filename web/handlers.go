@@ -40,6 +40,7 @@ type CalendarPushNotification struct {
 
 func CalendarNotifications(notifications chan<- *CalendarPushNotification) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Info("Push notification received")
 		defer r.Body.Close()
 
 		channelExpiration := r.Header.Get("X-Goog-webhook-Expiration")
@@ -52,13 +53,15 @@ func CalendarNotifications(notifications chan<- *CalendarPushNotification) http.
 			channelExpirationTime = &t
 		}
 		pushNotification := &CalendarPushNotification{
-			ResourceId:        r.Header.Get("X-Goog-Resource-Id"),
+			ResourceId:        r.Header.Get("X-Goog-Resource-ID"),
 			ChannelExpiration: channelExpirationTime,
-			ChannelId:         r.Header.Get("X-Goog-webhook-Id"),
+			ChannelId:         r.Header.Get("X-Goog-Channel-ID"),
 			MessageNumber:     r.Header.Get("X-Goog-Message-Number"),
 			ResourceState:     r.Header.Get("X-Goog-Resource-State"),
-			ResourceUri:       r.Header.Get("X-Goog-Resource-Uri"),
+			ResourceUri:       r.Header.Get("X-Goog-Resource-URI"),
 		}
+
+		w.Write([]byte("OK"))
 
 		notifications <- pushNotification
 	})

@@ -19,7 +19,7 @@ func NewCalendarWebHookManaged(calendarService *calendar.Service, url string) *c
 
 type calendarWebHookManaged struct {
 	url             string
-	webhook         *calendar.Channel
+	Webhook         *calendar.Channel
 	calendarService *calendar.Service
 	cancelRestart   context.CancelFunc
 }
@@ -35,10 +35,13 @@ func (c *calendarWebHookManaged) Start() error {
 	if err != nil {
 		return err
 	}
-	c.webhook = webhook
-	log.WithField("expires", time.Unix(c.webhook.Expiration/1000, 0)).Infof("Started channel %v \n", c.webhook.Id)
+	c.Webhook = webhook
+	log.
+		WithField("expires", time.Unix(c.Webhook.Expiration/1000, 0)).
+		WithField("url", c.url).
+		Infof("Started channel %v \n", c.Webhook.Id)
 
-	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.webhook.Expiration))
+	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.Webhook.Expiration))
 	return nil
 }
 
@@ -46,14 +49,14 @@ func (c calendarWebHookManaged) Stop() error {
 	if c.cancelRestart != nil {
 		c.cancelRestart()
 	}
-	err := c.calendarService.Channels.Stop(c.webhook).Do()
+	err := c.calendarService.Channels.Stop(c.Webhook).Do()
 	if err != nil {
-		log.Errorf("Could not stop channel %v", c.webhook.Id)
+		log.Errorf("Could not stop channel %v", c.Webhook.Id)
 		return err
 	} else {
-		log.Infof("Stopped channel %v \n", c.webhook.Id)
+		log.Infof("Stopped channel %v \n", c.Webhook.Id)
 	}
-	c.webhook = nil
+	c.Webhook = nil
 	return nil
 }
 

@@ -18,6 +18,9 @@ import (
 )
 
 type Config struct {
+	Addr              string
+	TLSCertPath       string
+	TLSKeyPath        string
 	ApiEndpoint       string
 	GoogleCredentials string
 	PhoneNumber       string
@@ -60,6 +63,15 @@ func main() {
 	go func() {
 		var syncToken string
 		for pushNotification := range pushNotifications {
+			// if we receive a push from a channel we haven't created, close it.
+			if pushNotification.ChannelId != pushNotificationsHook.Webhook.Id {
+				err := service.Channels.Stop(&calendar.Channel{Id: pushNotification.ChannelId, ResourceId: pushNotification.ResourceId}).Do()
+				if err != nil {
+					log.WithField("channel", pushNotification.ChannelId).Error("could not close lingering hook")
+				} else {
+					log.WithField("channel", pushNotification.ChannelId).Warn("closed lingering hook")
+				}
+			}
 			if pushNotification.ResourceState == "sync" {
 				syncToken = ""
 			}
@@ -93,7 +105,8 @@ func main() {
 	http.HandleFunc("/twilio", web.PhonePickedUpHandler)
 	http.HandleFunc("/", web.CalendarNotifications(pushNotifications))
 
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := http.ListenAndServeTLS(config.Addr, config.TLSCertPath, config.TLSKeyPath, nil); err != nil {
+		pushNotificationsHook.Stop()
 		panic(err)
 	}
 }
@@ -154,6 +167,9 @@ func makePhoneCall(twilio *gotwilio.Twilio, from, to, callbackUrl string) (*gotw
 
 func ReadConfig(config *Config) {
 	var (
+		defaultAddr       = os.Getenv("MEETINGS_ADDR")
+		defaultCertPath   = os.Getenv("MEETINGS_CERT_PATH")
+		defaultKeyPath    = os.Getenv("MEETINGS_KEY_PATH")
 		defaultCredsPath  = os.Getenv("MEETINGS_GOOGLE_CREDENTIALS_PATH")
 		apiEndpoint       = os.Getenv("MEETINGS_API_ENDPOINT")
 		myPhoneNumber     = os.Getenv("MEETINGS_MY_NUMBER")
@@ -166,6 +182,12 @@ func ReadConfig(config *Config) {
 	if defaultCredsPath == "" {
 		defaultCredsPath = "credentials.json"
 	}
+	if defaultAddr == "" {
+		defaultAddr = ":8080"
+	}
+	flag.StringVar(&config.Addr, "a", defaultAddr, "Address to bind to for the http server that will receive notifications")
+	flag.StringVar(&config.TLSCertPath, "cert", defaultCertPath, "Path to TLS Cert file")
+	flag.StringVar(&config.TLSKeyPath, "key", defaultKeyPath, "Path to TLS Key file")
 	flag.StringVar(&config.ApiEndpoint, "endpoint", apiEndpoint, "URL that google calendar will hit with push notifications")
 	flag.StringVar(&config.GoogleCredentials, "credentialsPath", defaultCredsPath, "Path to the file you user for your credentials")
 	flag.StringVar(&config.PhoneNumber, "phone", myPhoneNumber, "Phone number that will receive calls when a meeting is about to start")
@@ -175,7 +197,7 @@ func ReadConfig(config *Config) {
 	flag.StringVar(&config.CallbackUrl, "callbackUrl", twilioCallbackUrl, "URL you want Twilio to POST to when someone interacts with your phone call")
 	flag.Parse()
 
-	if config.PhoneNumber == "" || config.ApiEndpoint == "" || config.CallbackUrl == "" || config.CallFromNumber == "" || config.TwilioAuthToken == "" || config.TwilioAccountSid == "" || config.GoogleCredentials == "" {
+	if config.PhoneNumber == "" || config.ApiEndpoint == "" || config.CallbackUrl == "" || config.CallFromNumber == "" || config.TwilioAuthToken == "" || config.TwilioAccountSid == "" || config.GoogleCredentials == "" || config.TLSCertPath == "" || config.TLSKeyPath == "" {
 		log.Fatalf("Missing configs, all flags must be set %+v", *config)
 	}
 }

@@ -7,25 +7,37 @@ import (
 	"time"
 )
 
-// NotifyEventStarting receives a channel of events (new/updated/deleted) and returns a channel that fires every time an event is about to start
-func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Event, eventStarting chan<- *calendar.Event) {
-	// maps eventIds to a cancelFn we can call to cancel their alarms if the events are deleted or changed.
-	alarms := make(map[string]context.CancelFunc)
+type EventAlarm struct {
+	event       *calendar.Event
+	cancelAlarm context.CancelFunc
+}
 
+// NotifyEventStarting receives a channel of events (new/updated/deleted) and returns a channel that fires every time an event is about to start
+func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Event) <-chan *calendar.Event {
+	// maps eventIds to a cancelFn we can call to cancel their alarms if the events are deleted or changed.
+	alarms := make(map[string]EventAlarm)
+	eventStarting := make(chan *calendar.Event)
 	go func() {
 		for updatedEvent := range events {
 			event := updatedEvent
 
 			//if we have seen this event before, cancel the previous alarm and we'll recreate it
-			cancelPreviousAlarm, ok := alarms[event.Id]
+			eventAlarm, ok := alarms[event.Id]
+			logMsg := "Event received, setting alarm"
 			if ok {
-				cancelPreviousAlarm()
-				log.WithField("name", event.Summary).Info("Removed alarm for event")
-			}
-
-			// if the event is cancelled, do not set an alarm for it, it was handled above
-			if event.Status == "cancelled" {
-				continue
+				//cancel alarm if event has been cancelled or rescheduled
+				if event.Status == "cancelled" {
+					eventAlarm.cancelAlarm()
+					log.WithField("name", eventAlarm.event.Summary).Info("Event cancelled, alarm removed")
+					continue
+				} else if event.Start.DateTime == eventAlarm.event.Start.DateTime {
+					//evente hasn't changed, skip processing it
+					continue
+				} else if event.Start.DateTime != eventAlarm.event.Start.DateTime {
+					// event has changed, cancel alarm and set a new one below
+					logMsg = "Event updated, resetting alarm"
+					eventAlarm.cancelAlarm()
+				}
 			}
 
 			now := time.Now()
@@ -37,10 +49,10 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 			}
 
 			log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": timeUntilAlarm, "name": event.Summary}).
-				Info("Setting alarm for event")
+				Info(logMsg)
 
 			ctx, cancelAlarm := context.WithCancel(parentCtx)
-			alarms[event.Id] = cancelAlarm
+			alarms[event.Id] = EventAlarm{event: event, cancelAlarm: cancelAlarm}
 
 			//a goroutine will fire when the event is about to start, unless this is cancelled
 			go func() {
@@ -50,9 +62,10 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 					log.WithField("event", event.Summary).Info("Event is Starting")
 					eventStarting <- event
 				case <-ctx.Done():
-					// this happened before the timer so the alarm was cancelled
+					// alarm cancelled
 				}
 			}()
 		}
 	}()
+	return eventStarting
 }

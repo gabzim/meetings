@@ -7,6 +7,7 @@ import (
 	"github.com/sfreiberg/gotwilio"
 	log "github.com/sirupsen/logrus"
 	"meetings/gcal"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,14 +43,7 @@ func main() {
 		panic(err)
 	}
 
-	// Ask gCalendar to start pushing calendar updates to our endpoint
-	whConfig := &gcal.WebHookConfig{
-		ApiEndpoint:     config.ApiEndpoint,
-		KeyPath:         config.TLSKeyPath,
-		CertPath:        config.TLSCertPath,
-		Addr:            config.Addr,
-	}
-	pushNotificationsHook := gcal.NewManagedCalendarWebHook(calendarSrv, whConfig)
+	pushNotificationsHook, h := gcal.NewManagedCalendarWebHook(calendarSrv, config.ApiEndpoint)
 	err = pushNotificationsHook.Start()
 	if err != nil {
 		panic(err)
@@ -64,16 +58,25 @@ func main() {
 			makePhoneCall(twilio, config.CallFromNumber, config.PhoneNumber, config.CallbackUrl)
 			log.WithFields(log.Fields{"startingEvent": startingEvent.Summary}).Printf("Calling %v now...", config.PhoneNumber)
 		}
-}()
+	}()
 
-	// Ask Google to stop POSTing notifications when we stop the process
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
-	<-signals
-	log.Info("Closing push notification channel before exit...")
-	err = pushNotificationsHook.Stop()
-	if err != nil {
-		log.Fatal(err)
+	go func() {
+		// Ask Google to stop POSTing notifications when we stop the process
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+		<-signals
+		log.Info("Closing push notification channel before exit...")
+		err = pushNotificationsHook.Stop()
+		if err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+
+	if config.TLSCertPath != "" && config.TLSKeyPath != "" {
+		err = http.ListenAndServeTLS(config.Addr, config.TLSCertPath, config.TLSKeyPath, h)
+	} else {
+		err = http.ListenAndServe(config.Addr, h)
 	}
 }
 

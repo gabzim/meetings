@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/calendar/v3"
-	"net"
 	"net/http"
 	"sort"
 	"time"
@@ -22,25 +21,19 @@ type CalendarPushNotification struct {
 	Token             string
 }
 
-type WebHookConfig struct {
-	Addr        string
-	ApiEndpoint string
-	CertPath    string
-	KeyPath     string
-}
-
-func NewManagedCalendarWebHook(calendarService *calendar.Service, config *WebHookConfig) *calendarWebHookManaged {
+func NewManagedCalendarWebHook(calendarService *calendar.Service, endpoint string) (*calendarWebHookManaged, http.HandlerFunc) {
 	w := &calendarWebHookManaged{
-		config:      config,
-		calendarSrv: calendarService,
+		endpoint:          endpoint,
+		calendarSrv:       calendarService,
+		pushNotifications: make(chan *CalendarPushNotification, 1),
 	}
-
-	return w
+	handler := webhookHandler(w.pushNotifications)
+	return w, handler
 }
 
-//calendarWebHookManaged starts a web server where google calendar can push calendar notifications, then it instructs google to start pushing them (which is called a calendar.Channel)
+// calendarWebHookManaged instructs google to start pushing event updates via a webhook (called a Channel in the docs)
 // and manages the lifecycle of this Channel (google will only post notifications to your endpoint up until some expiration date, and you need to recreate the Channel after it's expired).
-// This service will handle that for you automatically. Also, if any other channels are open on this endpoint, it will close them.
+// This service will handle that recreation for you automatically. Also, if any other channels are open on this endpoint, it will close them.
 // After you .Start() this service, you can range over the .Events property. Any new/updated/deleted events will be sent in that channel.
 type calendarWebHookManaged struct {
 	//Events provides a channel that pushes *calendar.Events created/updated/deleted in your calendar. As your schedule changes
@@ -49,9 +42,8 @@ type calendarWebHookManaged struct {
 	//for this reason, it is your responsibility to keep track of the events you have seen and the ones you haven't (and whether they have changed)
 	Events            chan *calendar.Event
 	webhook           *calendar.Channel
-	config            *WebHookConfig
+	endpoint          string
 	calendarSrv       *calendar.Service
-	httpSrv           *http.Server
 	cancelRestart     context.CancelFunc
 	pushNotifications chan *CalendarPushNotification
 	syncToken         string
@@ -59,13 +51,8 @@ type calendarWebHookManaged struct {
 }
 
 func (c *calendarWebHookManaged) Start() error {
-	err := c.startWebServer()
+	err := c.startCalendarChannel()
 	if err != nil {
-		return err
-	}
-	err = c.startCalendarChannel()
-	if err != nil {
-		c.stopWebServer()
 		return err
 	}
 	c.startEventChannel()
@@ -79,55 +66,7 @@ func (c *calendarWebHookManaged) Stop() error {
 	if err != nil {
 		return err
 	}
-	return c.stopWebServer()
-}
-
-func (c *calendarWebHookManaged) startWebServer() error {
-	pushNotifications := make(chan *CalendarPushNotification)
-
-	srv := &http.Server{
-		Addr:    c.config.Addr,
-		Handler: webhookHandler(pushNotifications),
-	}
-
-	addr := srv.Addr
-	if addr == "" {
-		addr = ":https"
-	}
-
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	go func() {
-		defer ln.Close()
-		var err error
-		if c.config.CertPath != "" && c.config.KeyPath != "" {
-			err = srv.ServeTLS(tcpKeepAliveListener{ln.(*net.TCPListener)}, c.config.CertPath, c.config.KeyPath)
-		} else {
-			err = srv.Serve(tcpKeepAliveListener{ln.(*net.TCPListener)})
-		}
-		if err != http.ErrServerClosed {
-			log.Errorf("Error closing httpSrv: %v", err)
-		}
-	}()
-
-	c.pushNotifications = pushNotifications
-	c.httpSrv = srv
-	return nil
-}
-
-func (c *calendarWebHookManaged) stopWebServer() error {
-	if c.httpSrv == nil {
-		return fmt.Errorf("web server not running")
-	}
-	err := c.httpSrv.Close()
-	if err != nil {
-		return err
-	}
 	close(c.pushNotifications)
-	c.httpSrv = nil
-	c.pushNotifications = nil
 	return nil
 }
 
@@ -160,11 +99,10 @@ func (c *calendarWebHookManaged) stopNotificationTicker() {
 	c.ticker.Stop()
 }
 
-
 func (c *calendarWebHookManaged) startCalendarChannel() error {
 	channel := &calendar.Channel{
 		Id:      uuid.New().String(),
-		Address: c.config.ApiEndpoint,
+		Address: c.endpoint,
 		Type:    "web_hook",
 	}
 	webhook, err := c.calendarSrv.Events.Watch("primary", channel).Do()
@@ -174,7 +112,7 @@ func (c *calendarWebHookManaged) startCalendarChannel() error {
 	c.webhook = webhook
 	log.
 		WithField("expires", time.Unix(c.webhook.Expiration/1000, 0)).
-		WithField("url", c.config.ApiEndpoint).
+		WithField("url", c.endpoint).
 		Infof("Started channel %v \n", c.webhook.Id)
 
 	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.webhook.Expiration))
@@ -319,22 +257,4 @@ func webhookHandler(notifications chan<- *CalendarPushNotification) http.Handler
 
 		notifications <- pushNotification
 	}
-}
-
-// tcpKeepAliveListener sets TCP keep-alive timeouts on accepted
-// connections. It's used by startWebServer and stopWebServer so
-// dead TCP connections (e.g. closing laptop mid-download) eventually
-// go away.
-type tcpKeepAliveListener struct {
-	*net.TCPListener
-}
-
-func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
-	tc, err := ln.AcceptTCP()
-	if err != nil {
-		return nil, err
-	}
-	tc.SetKeepAlive(true)
-	tc.SetKeepAlivePeriod(3 * time.Minute)
-	return tc, nil
 }

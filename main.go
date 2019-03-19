@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 type AppConfig struct {
@@ -50,7 +51,8 @@ func main() {
 	}
 
 	//take events coming in and, WHEN THEY'RE ABOUT TO START, push them to eventStartingNotifications
-	eventStartingNotifications := gcal.NotifyEventStarting(context.Background(), pushNotificationsHook.Events)
+	ctx, cancelAlarms := context.WithCancel(context.Background())
+	eventStartingNotifications := gcal.NotifyEventStarting(ctx, pushNotificationsHook.Events, 30 * time.Second)
 
 	// when an event is about to start, call phone
 	go func() {
@@ -66,6 +68,7 @@ func main() {
 		signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 		<-signals
 		log.Info("Closing push notification channel before exit...")
+		cancelAlarms()
 		err = pushNotificationsHook.Stop()
 		if err != nil {
 			log.Fatal(err)
@@ -73,6 +76,7 @@ func main() {
 		os.Exit(0)
 	}()
 
+	//set up web server that will listen for google calendar push notifications using the handler returned when creating the webhook
 	if config.TLSCertPath != "" && config.TLSKeyPath != "" {
 		err = http.ListenAndServeTLS(config.Addr, config.TLSCertPath, config.TLSKeyPath, h)
 	} else {
@@ -82,7 +86,7 @@ func main() {
 
 func makePhoneCall(twilio *gotwilio.Twilio, from, to, callbackUrl string) (*gotwilio.VoiceResponse, *gotwilio.Exception, error) {
 	callbackParams := gotwilio.NewCallbackParameters(callbackUrl)
-	callbackParams.Timeout = 20
+	callbackParams.Timeout = 15
 	call, ex, err := twilio.CallWithUrlCallbacks(from, to, callbackParams)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error making phone call %v", err)

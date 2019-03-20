@@ -40,6 +40,11 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 				}
 			}
 
+			// if an event is cancelled but we didn't have an alarm set for it, just skip
+			if event.Status == "cancelled" {
+				continue
+			}
+
 			now := time.Now()
 			eventStartTime, _ := time.Parse(time.RFC3339, event.Start.DateTime)
 			timeUntilAlarm := eventStartTime.Sub(now) - timeBeforeStart // trigger alarm `timeBeforeStart` before event starts

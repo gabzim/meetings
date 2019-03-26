@@ -44,8 +44,8 @@ func main() {
 		panic(err)
 	}
 
-	pushNotificationsHook, h := gcal.NewManagedCalendarWebHook(calendarSrv, config.ApiEndpoint)
-	err = pushNotificationsHook.Start()
+	pushNotificationsHook := gcal.NewManagedCalendarWebHook(calendarSrv, config.ApiEndpoint)
+	h, err := pushNotificationsHook.Start()
 	if err != nil {
 		panic(err)
 	}

@@ -71,6 +71,8 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 				}
 			}()
 		}
+		//if the event updates channel is closed, close the event starting channel as well
+		close(eventStarting)
 	}()
 	return eventStarting
 }

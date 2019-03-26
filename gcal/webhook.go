@@ -21,14 +21,12 @@ type CalendarPushNotification struct {
 	Token             string
 }
 
-func NewManagedCalendarWebHook(calendarService *calendar.Service, endpoint string) (*calendarWebHookManaged, http.HandlerFunc) {
+func NewManagedCalendarWebHook(calendarService *calendar.Service, endpoint string) *calendarWebHookManaged {
 	w := &calendarWebHookManaged{
 		endpoint:          endpoint,
 		calendarSrv:       calendarService,
-		pushNotifications: make(chan *CalendarPushNotification, 1),
 	}
-	handler := webhookHandler(w.pushNotifications)
-	return w, handler
+	return w
 }
 
 // calendarWebHookManaged instructs google to start pushing event updates via a webhook (called a Channel in the docs)
@@ -41,7 +39,7 @@ type calendarWebHookManaged struct {
 	//so that if you have a stale cache you can refresh it,
 	//for this reason, it is your responsibility to keep track of the events you have seen and the ones you haven't (and whether they have changed)
 	Events            chan *calendar.Event
-	webhook           *calendar.Channel
+	gcalChannel       *calendar.Channel
 	endpoint          string
 	calendarSrv       *calendar.Service
 	cancelRestart     context.CancelFunc
@@ -50,53 +48,15 @@ type calendarWebHookManaged struct {
 	ticker            *time.Ticker
 }
 
-func (c *calendarWebHookManaged) Start() error {
+func (c *calendarWebHookManaged) Start() (http.HandlerFunc, error) {
 	err := c.startCalendarChannel()
 	if err != nil {
-		return err
+		return nil, err
 	}
+	c.pushNotifications = make(chan *CalendarPushNotification)
 	c.startEventChannel()
 	c.startNotificationTicker(time.Hour)
-	return nil
-}
-
-func (c *calendarWebHookManaged) Stop() error {
-	c.stopNotificationTicker()
-	err := c.stopCalendarChannel()
-	if err != nil {
-		return err
-	}
-	close(c.pushNotifications)
-	return nil
-}
-
-func (c *calendarWebHookManaged) startNotificationTicker(d time.Duration) {
-	if c.pushNotifications == nil {
-		return
-	}
-	ticker := time.NewTicker(d)
-	c.ticker = ticker
-	go func() {
-		for range ticker.C {
-			exp := parseUnixTimeInSeconds(c.webhook.Expiration)
-			c.pushNotifications <- &CalendarPushNotification{
-				ChannelId:         c.webhook.Id,
-				ResourceId:        c.webhook.ResourceId,
-				ChannelExpiration: &exp,
-				ResourceState:     "sync",
-				ResourceUri:       "",
-				MessageNumber:     "1",
-				Token:             c.webhook.Token,
-			}
-		}
-	}()
-}
-
-func (c *calendarWebHookManaged) stopNotificationTicker() {
-	if c.ticker == nil {
-		return
-	}
-	c.ticker.Stop()
+	return createPushNotificationHandler(c.pushNotifications), nil
 }
 
 func (c *calendarWebHookManaged) startCalendarChannel() error {
@@ -109,34 +69,13 @@ func (c *calendarWebHookManaged) startCalendarChannel() error {
 	if err != nil {
 		return err
 	}
-	c.webhook = webhook
+	c.gcalChannel = webhook
 	log.
-		WithField("expires", time.Unix(c.webhook.Expiration/1000, 0)).
+		WithField("expires", time.Unix(c.gcalChannel.Expiration/1000, 0)).
 		WithField("url", c.endpoint).
-		Infof("Started channel %v \n", c.webhook.Id)
+		Infof("Started channel %v \n", c.gcalChannel.Id)
 
-	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.webhook.Expiration))
-	return nil
-}
-
-func (c *calendarWebHookManaged) stopCalendarChannel() error {
-	if c.cancelRestart != nil {
-		c.cancelRestart()
-	}
-
-	if c.webhook == nil {
-		return fmt.Errorf("webhook already closed")
-	}
-
-	err := c.calendarSrv.Channels.Stop(c.webhook).Do()
-	if err != nil {
-		log.Errorf("Could not stop channel %v", c.webhook.Id)
-		return err
-	} else {
-		log.Infof("Stopped channel %v \n", c.webhook.Id)
-	}
-	c.webhook = nil
-	c.cancelRestart = nil
+	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.gcalChannel.Expiration))
 	return nil
 }
 
@@ -148,7 +87,7 @@ func (c *calendarWebHookManaged) startEventChannel() {
 				c.syncToken = ""
 			}
 			// if we receive a push from a channel we haven't created, close it.
-			if pushNotification.ChannelId != c.webhook.Id {
+			if pushNotification.ChannelId != c.gcalChannel.Id {
 				err := c.calendarSrv.Channels.Stop(&calendar.Channel{Id: pushNotification.ChannelId, ResourceId: pushNotification.ResourceId}).Do()
 				if err != nil {
 					log.WithField("channel", pushNotification.ChannelId).Error("could not close lingering hook")
@@ -171,6 +110,66 @@ func (c *calendarWebHookManaged) startEventChannel() {
 		}
 		close(c.Events)
 	}()
+}
+
+func (c *calendarWebHookManaged) startNotificationTicker(d time.Duration) {
+	if c.pushNotifications == nil {
+		return
+	}
+	ticker := time.NewTicker(d)
+	c.ticker = ticker
+	go func() {
+		for range ticker.C {
+			exp := parseUnixTimeInSeconds(c.gcalChannel.Expiration)
+			c.pushNotifications <- &CalendarPushNotification{
+				ChannelId:         c.gcalChannel.Id,
+				ResourceId:        c.gcalChannel.ResourceId,
+				ChannelExpiration: &exp,
+				ResourceState:     "sync",
+				ResourceUri:       "",
+				MessageNumber:     "1",
+				Token:             c.gcalChannel.Token,
+			}
+		}
+	}()
+}
+
+func (c *calendarWebHookManaged) Stop() error {
+	c.stopNotificationTicker()
+	err := c.stopCalendarChannel()
+	if err != nil {
+		return err
+	}
+	close(c.pushNotifications)
+	return nil
+}
+
+func (c *calendarWebHookManaged) stopNotificationTicker() {
+	if c.ticker == nil {
+		return
+	}
+	c.ticker.Stop()
+}
+
+func (c *calendarWebHookManaged) stopCalendarChannel() error {
+	if c.cancelRestart != nil {
+		c.cancelRestart()
+	}
+
+	if c.gcalChannel == nil {
+		return fmt.Errorf("webhook already closed")
+	}
+
+	err := c.calendarSrv.Channels.Stop(c.gcalChannel).Do()
+	if err != nil {
+		log.Errorf("Could not stop channel %v", c.gcalChannel.Id)
+		return err
+	} else {
+		log.Infof("Stopped channel %v \n", c.gcalChannel.Id)
+	}
+	c.gcalChannel = nil
+	c.cancelRestart = nil
+	return nil
 }
 
 // fetchEventsDelta retrieves events from the calendar, if syncToken is passed, only deltas from the last query will be retrieved
@@ -230,7 +229,7 @@ func parseUnixTimeInSeconds(secs int64) time.Time {
 	return time.Unix(secs/1000, 0)
 }
 
-func webhookHandler(notifications chan<- *CalendarPushNotification) http.HandlerFunc {
+func createPushNotificationHandler(notifications chan<- *CalendarPushNotification) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 

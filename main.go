@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/gabzim/meetings/gcal"
+	"github.com/gabzim/meetings/gcalnotifications"
 	"github.com/sfreiberg/gotwilio"
 	log "github.com/sirupsen/logrus"
 	"net/http"
@@ -39,20 +39,20 @@ func main() {
 	ReadConfig(&config)
 
 	twilio := gotwilio.NewTwilioClient(config.TwilioAccountSid, config.TwilioAuthToken)
-	calendarSrv, err := gcal.GetCalendarClient("credentials.json")
+	calendarSrv, err := gcalnotifications.GetCalendarClient("credentials.json")
 	if err != nil {
-		panic(err)
+		log.Fatalf("could not create a google calendar client: %v", err)
 	}
 
-	pushNotificationsHook := gcal.NewManagedCalendarWebHook(calendarSrv, config.ApiEndpoint)
-	h, err := pushNotificationsHook.Start()
+	pushNotificationsHook := gcalnotifications.New(calendarSrv, config.ApiEndpoint)
+	events, err := pushNotificationsHook.Start()
 	if err != nil {
 		panic(err)
 	}
 
 	//take events coming in and, WHEN THEY'RE ABOUT TO START, push them to eventStartingNotifications
 	ctx, cancelAlarms := context.WithCancel(context.Background())
-	eventStartingNotifications := gcal.NotifyEventStarting(ctx, pushNotificationsHook.Events, 30 * time.Second)
+	eventStartingNotifications := gcalnotifications.NotifyEventStarting(ctx, events, 30 * time.Second)
 
 	// when an event is about to start, call phone
 	go func() {
@@ -76,11 +76,11 @@ func main() {
 		os.Exit(0)
 	}()
 
-	//set up web server that will listen for google calendar push notifications using the handler returned when creating the webhook
+	//set up web server that will listen for google calendar push notifications using the handler exposed by the push notification hook
 	if config.TLSCertPath != "" && config.TLSKeyPath != "" {
-		err = http.ListenAndServeTLS(config.Addr, config.TLSCertPath, config.TLSKeyPath, h)
+		err = http.ListenAndServeTLS(config.Addr, config.TLSCertPath, config.TLSKeyPath, pushNotificationsHook.Handler)
 	} else {
-		err = http.ListenAndServe(config.Addr, h)
+		err = http.ListenAndServe(config.Addr, pushNotificationsHook.Handler)
 	}
 }
 

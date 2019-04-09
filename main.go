@@ -39,7 +39,7 @@ func main() {
 	ReadConfig(&config)
 
 	twilio := gotwilio.NewTwilioClient(config.TwilioAccountSid, config.TwilioAuthToken)
-	calendarSrv, err := gcalnotifications.GetCalendarClient("credentials.json")
+	calendarSrv, err := gcalnotifications.GetCalendarClient(config.GoogleCredentials)
 	if err != nil {
 		log.Fatalf("could not create a google calendar client: %v", err)
 	}

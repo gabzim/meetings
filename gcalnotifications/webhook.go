@@ -22,6 +22,8 @@ type CalendarPushNotification struct {
 
 type pushNotificationHandler func(*CalendarPushNotification) error
 
+var syncEvery30Minutes = 30 * time.Minute
+
 func New(calendarService *calendar.Service, endpoint string) *calendarWebHookManaged {
 	w := &calendarWebHookManaged{
 		calendarSrv: calendarService,
@@ -60,8 +62,25 @@ func (c *calendarWebHookManaged) Start() (<-chan *calendar.Event, error) {
 		return nil, err
 	}
 	c.events = make(chan *calendar.Event, 100)
-	c.startNotificationTicker(30 * time.Minute)
+	c.startEventSyncTicker(syncEvery30Minutes)
 	return c.events, nil
+}
+
+func (c *calendarWebHookManaged) Stop() error {
+	c.stopEventSyncTicker()
+	err := c.stopCalendarChannel()
+	if err != nil {
+		// we couldn't stop the channel, start sync ticker again so we do not leave the stop halfway through.
+		c.startEventSyncTicker(syncEvery30Minutes)
+		return err
+	}
+	close(c.events)
+	c.events = nil
+	return nil
+}
+
+func (c *calendarWebHookManaged) IsRunning() bool {
+	return c.events != nil
 }
 
 func (c *calendarWebHookManaged) startCalendarChannel(endpoint string) error {
@@ -81,6 +100,59 @@ func (c *calendarWebHookManaged) startCalendarChannel(endpoint string) error {
 		Infof("Started channel %v \n", c.gcalChannel.Id)
 
 	c.cancelRestart = c.restartAt(parseUnixTimeInSeconds(c.gcalChannel.Expiration))
+	return nil
+}
+
+func (c *calendarWebHookManaged) startEventSyncTicker(d time.Duration) {
+	ticker := time.NewTicker(d)
+	c.ticker = ticker
+	go func() {
+		for range ticker.C {
+			if c.gcalChannel == nil {
+				c.stopEventSyncTicker()
+				return
+			}
+			exp := parseUnixTimeInSeconds(c.gcalChannel.Expiration)
+			pushNotification := &CalendarPushNotification{
+				ChannelId:         c.gcalChannel.Id,
+				ResourceId:        c.gcalChannel.ResourceId,
+				ChannelExpiration: &exp,
+				ResourceState:     "sync",
+				ResourceUri:       "",
+				MessageNumber:     "1",
+				Token:             c.gcalChannel.Token,
+			}
+			c.handleIncomingPushNotification(pushNotification)
+		}
+	}()
+}
+
+func (c *calendarWebHookManaged) stopEventSyncTicker() {
+	if c.ticker == nil {
+		return
+	}
+	c.ticker.Stop()
+	c.ticker = nil
+}
+
+func (c *calendarWebHookManaged) stopCalendarChannel() error {
+	if c.cancelRestart != nil {
+		c.cancelRestart()
+	}
+
+	if c.gcalChannel == nil {
+		return fmt.Errorf("webhook already closed")
+	}
+
+	err := c.calendarSrv.Channels.Stop(c.gcalChannel).Do()
+	if err != nil {
+		log.Errorf("Could not stop channel %v", c.gcalChannel.Id)
+		return err
+	} else {
+		log.Infof("Stopped channel %v \n", c.gcalChannel.Id)
+	}
+	c.gcalChannel = nil
+	c.cancelRestart = nil
 	return nil
 }
 
@@ -114,70 +186,6 @@ func (c *calendarWebHookManaged) handleIncomingPushNotification(pushNotification
 	for _, event := range events {
 		c.events <- event
 	}
-	return nil
-}
-
-func (c *calendarWebHookManaged) startNotificationTicker(d time.Duration) {
-	ticker := time.NewTicker(d)
-	c.ticker = ticker
-	go func() {
-		for range ticker.C {
-			exp := parseUnixTimeInSeconds(c.gcalChannel.Expiration)
-			pushNotification := &CalendarPushNotification{
-				ChannelId:         c.gcalChannel.Id,
-				ResourceId:        c.gcalChannel.ResourceId,
-				ChannelExpiration: &exp,
-				ResourceState:     "sync",
-				ResourceUri:       "",
-				MessageNumber:     "1",
-				Token:             c.gcalChannel.Token,
-			}
-			c.handleIncomingPushNotification(pushNotification)
-		}
-	}()
-}
-
-func (c *calendarWebHookManaged) IsRunning() bool {
-	return c.events != nil
-}
-
-
-func (c *calendarWebHookManaged) Stop() error {
-	err := c.stopCalendarChannel()
-	if err != nil {
-		return err
-	}
-	c.stopNotificationTicker()
-	close(c.events)
-	c.events = nil
-	return nil
-}
-
-func (c *calendarWebHookManaged) stopNotificationTicker() {
-	if c.ticker == nil {
-		return
-	}
-	c.ticker.Stop()
-}
-
-func (c *calendarWebHookManaged) stopCalendarChannel() error {
-	if c.cancelRestart != nil {
-		c.cancelRestart()
-	}
-
-	if c.gcalChannel == nil {
-		return fmt.Errorf("webhook already closed")
-	}
-
-	err := c.calendarSrv.Channels.Stop(c.gcalChannel).Do()
-	if err != nil {
-		log.Errorf("Could not stop channel %v", c.gcalChannel.Id)
-		return err
-	} else {
-		log.Infof("Stopped channel %v \n", c.gcalChannel.Id)
-	}
-	c.gcalChannel = nil
-	c.cancelRestart = nil
 	return nil
 }
 

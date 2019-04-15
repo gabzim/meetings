@@ -52,7 +52,7 @@ func main() {
 
 	//take events coming in and, WHEN THEY'RE ABOUT TO START, push them to eventStartingNotifications
 	ctx, cancelAlarms := context.WithCancel(context.Background())
-	eventStartingNotifications := gcalnotifications.NotifyEventStarting(ctx, events, 30 * time.Second)
+	eventStartingNotifications := gcalnotifications.NotifyEventStarting(ctx, events, 30 * time.Second, false)
 
 	// when an event is about to start, call phone
 	go func() {

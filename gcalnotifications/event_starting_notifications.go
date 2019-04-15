@@ -12,8 +12,8 @@ type EventAlarm struct {
 	cancelAlarm context.CancelFunc
 }
 
-// NotifyEventStarting receives a channel of events (new/updated/deleted) and returns a channel that fires every time an event is about to start
-func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Event, timeBeforeStart time.Duration) <-chan *calendar.Event {
+// NotifyEventStarting receives a channel of events (new/updated/deleted) and returns a channel that fires every time an event is about to start (or also if they've already started, depending on the value of the last argument).
+func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Event, timeBeforeStart time.Duration, notifyStarted bool) <-chan *calendar.Event {
 	// maps eventIds to a cancelFn we can call to cancel their alarms if the events are deleted or changed.
 	alarms := make(map[string]EventAlarm)
 	eventStarting := make(chan *calendar.Event)
@@ -49,6 +49,11 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 			eventStartTime, _ := time.Parse(time.RFC3339, event.Start.DateTime)
 			timeUntilAlarm := eventStartTime.Sub(now) - timeBeforeStart // trigger alarm `timeBeforeStart` before event starts
 			if timeUntilAlarm < 0 {
+				if notifyStarted {
+					log.WithField("event", event.Summary).Info("Event already started")
+					eventStarting <- event
+					continue
+				}
 				log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": "   N/A   ", "name": event.Summary}).Info("Event is already in progress, skipping alarm")
 				continue
 			}

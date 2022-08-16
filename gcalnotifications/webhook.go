@@ -226,7 +226,7 @@ func (c *calendarWebHookManaged) restartAt(t time.Time) context.CancelFunc {
 
 	go func() {
 		select {
-		case <-time.After(t.Sub(time.Now())):
+		case <-time.After(time.Until(t)):
 			c.restart()
 		case <-ctx.Done():
 

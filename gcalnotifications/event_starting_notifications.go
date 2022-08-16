@@ -13,15 +13,15 @@ type eventAlarm struct {
 }
 
 // NotifyEventStarting receives a channel of events (new/updated/deleted) and returns a channel that fires every time an event is about to start (or also if they've already started, depending on the value of the last argument).
-func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Event, timeBeforeStart time.Duration, skipAlreadyStarted bool) <-chan *calendar.Event {
+func NotifyEventStarting(parentCtx context.Context, incomingEvents <-chan *calendar.Event, timeBeforeStart time.Duration, skipAlreadyStarted bool) <-chan *calendar.Event {
 	// maps eventIds to a cancelFn we can call to cancel their alarms if the events are deleted or changed.
 	eventAlarms := make(map[string]eventAlarm)
 
 	eventStarting := make(chan *calendar.Event)
 
 	go func() {
-		for updatedEvent := range events {
-			event := updatedEvent
+		for event := range incomingEvents {
+			event := event
 			logMsg := "Event received, setting alarm"
 
 			eventAlarm, alarmIsSet := eventAlarms[event.Id]
@@ -51,9 +51,8 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 
 			now := time.Now()
 			eventEndTime, _ := time.Parse(time.RFC3339, event.End.DateTime)
-			timeUntilEnd := eventEndTime.Sub(now)
 
-			if timeUntilEnd < 0 {
+			if eventEndTime.Before(now) {
 				log.WithFields(log.Fields{"name": event.Summary}).Info("Event that already ended, skipping alarm...")
 				// this event already ended, just ignore it
 				continue
@@ -61,17 +60,14 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 
 			eventStartTime, _ := time.Parse(time.RFC3339, event.Start.DateTime)
 			alarmTime := eventStartTime.Add(-timeBeforeStart)
-			timeUntilAlarm := alarmTime.Sub(now)
 
 			// if the event has already started
-			if timeUntilAlarm < 0 {
-				if skipAlreadyStarted {
-					log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": "   N/A   ", "name": event.Summary}).Info("Event is already in progress, skipping alarm")
-					continue
-				}
+			if eventStartTime.After(now) && skipAlreadyStarted {
+				log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": "   N/A   ", "name": event.Summary}).Info("Event is already in progress, skipping alarm")
+				continue
 			}
 
-			log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": timeUntilAlarm, "name": event.Summary}).
+			log.WithFields(log.Fields{"at": eventStartTime.Format(time.RFC1123), "in": alarmTime.Sub(now), "name": event.Summary}).
 				Info(logMsg)
 
 			eventAlarms[event.Id] = setAlarmForEvent(parentCtx, event, alarmTime, eventStarting)
@@ -91,19 +87,20 @@ func NotifyEventStarting(parentCtx context.Context, events <-chan *calendar.Even
 func setAlarmForEvent(parentCtx context.Context, event *calendar.Event, alarmTime time.Time, alarmFired chan *calendar.Event) eventAlarm {
 	ctx, cancelAlarm := context.WithCancel(parentCtx)
 	now := time.Now()
-	timeUntilAlarm := alarmTime.Sub(now)
+	durationUntilAlarm := alarmTime.Sub(now)
 	alarm := eventAlarm{event: event, cancelAlarm: cancelAlarm}
 
 	//event already started, fire now
-	if timeUntilAlarm <= 0 {
-		log.WithFields(log.Fields{"event": event.Summary, "startTime": event.Start.DateTime, "timeUntilAlarm": timeUntilAlarm}).Info("Event already started, notifying")
+	if durationUntilAlarm <= 0 {
+		log.WithFields(log.Fields{"event": event.Summary, "startTime": event.Start.DateTime, "timeUntilAlarm": durationUntilAlarm}).Info("Event already started, notifying")
 		alarmFired <- event
 		return alarm
 	}
 
 	//a goroutine will fire when the event is about to start, unless this is cancelled
 	go func() {
-		timer := time.NewTimer(timeUntilAlarm)
+		// TODO maybe reuse timers with sync.Pool
+		timer := time.NewTimer(durationUntilAlarm)
 		select {
 		case <-timer.C:
 			log.WithField("event", event.Summary).Info("Firing alarm for event")

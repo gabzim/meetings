@@ -1,4 +1,6 @@
 .idea/
+bin/
 
 credentials.json
 token.json
+meetings-token.txt

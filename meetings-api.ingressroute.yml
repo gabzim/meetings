@@ -1,0 +1,16 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: meetings-api
+  namespace: meetings-api
+spec:
+  tls:
+    certResolver: le
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`meetings-api.gabrielzim.com`)
+      services:
+        - name: meetings-api
+          port: 80

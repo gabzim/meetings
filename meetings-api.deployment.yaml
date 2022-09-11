@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meetings-api
+  namespace: meetings-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meetings-api
+  template:
+    metadata:
+      labels:
+        app: meetings-api
+    spec:
+      containers:
+        - name: meetings-api
+          image: registry.digitalocean.com/zimmermann/meetings-api:0.0.6 #<IMAGE>
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: "MEETINGS_HOST_URL"
+              value: "https://meetings-api.gabrielzim.com"
+          envFrom:
+            - secretRef:
+                name: "meetings-oauth"
+            - secretRef:
+                name: "meetings-db"

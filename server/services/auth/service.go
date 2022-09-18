@@ -1,8 +1,13 @@
 package auth
 
 import (
+	"errors"
 	"github.com/markbates/goth"
 	"go.uber.org/zap"
+)
+
+var (
+	ErrTokenInvalid = errors.New("TOKEN_INVALID_FOR_USER")
 )
 
 type Service struct {
@@ -30,7 +35,15 @@ func (s *Service) RegisterUser(u *goth.User) (*UserToken, error) {
 }
 
 // AuthenticateUser given a token will authenticate a user and return it, or an error
-func (s *Service) AuthenticateUser(t string) (*UserToken, error) {
-	tok, err := s.store.SelectToken(t)
-	return tok, err
+func (s *Service) AuthenticateUser(email string, token string) (*UserToken, error) {
+	tokens, err := s.store.SelectByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tokens {
+		if t.MeetingsToken == token {
+			return t, err
+		}
+	}
+	return nil, ErrTokenInvalid
 }

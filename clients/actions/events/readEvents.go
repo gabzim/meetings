@@ -9,7 +9,7 @@ import (
 
 func ReadEvents(ctx context.Context, i io.Reader) <-chan *calendar.Event {
 	dec := json.NewDecoder(i)
-	events := make(chan *calendar.Event)
+	events := make(chan *calendar.Event, 5)
 	go func() {
 		defer close(events)
 		for {

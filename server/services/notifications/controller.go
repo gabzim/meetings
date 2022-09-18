@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"errors"
 	"fmt"
 	"github.com/gabzim/meetings/server/services/auth"
 	"github.com/gorilla/websocket"
@@ -27,13 +28,19 @@ type Controller struct {
 
 func (c *Controller) RegisterClient(w http.ResponseWriter, r *http.Request) {
 	t := r.URL.Query().Get("token")
+	email := r.URL.Query().Get("email")
 	calendarName := r.URL.Query().Get("calendar")
 
-	user, err := c.auth.AuthenticateUser(t)
-	if err != nil {
-		c.log.Errorf("could not authenticate user: %v", err)
+	user, err := c.auth.AuthenticateUser(email, t)
+	if errors.Is(err, auth.ErrUserNotFound) {
 		w.WriteHeader(404)
 		fmt.Fprintf(w, "User not found")
+		c.log.Errorf("could not authenticate user: %v", err)
+		return
+	} else if errors.Is(err, auth.ErrTokenInvalid) {
+		w.WriteHeader(401)
+		fmt.Fprintf(w, "Token provided is not valid")
+		c.log.Errorf("could not authenticate user: %v", err)
 		return
 	}
 

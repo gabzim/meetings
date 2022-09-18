@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"database/sql"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/dchest/uniuri"
@@ -22,7 +25,7 @@ type UserToken struct {
 }
 
 func (t *UserToken) GenerateAuthToken() {
-	t.MeetingsToken = uniuri.NewLen(256)
+	t.MeetingsToken = uniuri.NewLen(64)
 }
 
 // GetOauthToken description
@@ -38,11 +41,26 @@ func NewTokenStore(db *sqlx.DB) *TokenStore {
 	return &TokenStore{db}
 }
 
+var ErrUserNotFound = errors.New("USER_NOT_FOUND")
+
 func (s *TokenStore) SelectToken(authToken string) (*UserToken, error) {
 	user := UserToken{}
 	err := s.db.Get(&user, "SELECT id, access_token, refresh_token, email, meetings_token, first_name, last_name, expires_at, created_at, updated_at from user_tokens where meetings_token = $1", authToken)
-	// Todo wrap error
+	if errors.Is(err, sql.ErrNoRows) {
+		return &user, ErrUserNotFound
+	}
 	return &user, err
+}
+
+func (s *TokenStore) SelectByEmail(email string) ([]*UserToken, error) {
+	email = strings.ToLower(strings.Trim(email, " "))
+	tokens := make([]*UserToken, 0)
+	err := s.db.Select(&tokens, "SELECT id, access_token, refresh_token, email, meetings_token, first_name, last_name, expires_at, created_at, updated_at from user_tokens where email = $1", email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tokens, ErrUserNotFound
+	}
+	// Todo wrap error
+	return tokens, err
 }
 
 func (s *TokenStore) UpsertToken(t *UserToken) (*UserToken, error) {

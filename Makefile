@@ -15,3 +15,4 @@ build-alerts:
 	go build -o bin/meetings-alerts ./clients/actions/cmd/alerts.go
 
 build-all: build-server build-connect build-filters build-lights build-alerts
+

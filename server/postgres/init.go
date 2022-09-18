@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS user_tokens(
     id SERIAL PRIMARY KEY,
     access_token CHAR(255) NOT NULL,
     refresh_token CHAR(255) NOT NULL,
-    meetings_token CHAR(256) UNIQUE NOT NULL,
+    meetings_token CHAR(64) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     first_name VARCHAR(50),
     last_name VARCHAR(50),

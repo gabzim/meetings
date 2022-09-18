@@ -43,5 +43,5 @@ func (c *GoogleAuthController) Callback(w http.ResponseWriter, r *http.Request) 
 		fmt.Fprint(w, err)
 		return
 	}
-	fmt.Fprint(w, t.MeetingsToken)
+	fmt.Fprintf(w, "%s %s", t.Email, t.MeetingsToken)
 }

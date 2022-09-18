@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/amimof/huego"
 	"github.com/gabzim/meetings/clients/actions/events"
+	lights2 "github.com/gabzim/meetings/clients/actions/lights"
 	"github.com/jessevdk/go-flags"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -77,7 +78,13 @@ func getConfig() (*Opts, error) {
 
 	if opts.UserToken == "" || opts.BridgeAddr == "" {
 		// 1. read from f system
-		f, err := os.OpenFile("/tmp/hue.config", os.O_RDWR|os.O_CREATE, 0655)
+		var path string
+		if os.Getenv("MEETINGS_LIGHTS_CFG_PATH") != "" {
+			path = os.Getenv("MEETINGS_LIGHTS_CFG_PATH")
+		} else {
+			path = "/tmp/hue.config"
+		}
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0655)
 		defer f.Close()
 		if err != nil {
 			return nil, err
@@ -139,25 +146,31 @@ func main() {
 		os.Exit(0)
 	}()
 
-	logger, err := zap.NewDevelopment()
+	logger, _ := zap.NewDevelopment()
 	log := logger.Sugar()
 	opts, err := getConfig()
 	if err != nil {
-		panic(err)
+		log.Fatalf("error getting config: %v", err)
 	}
 	bridge := huego.New(opts.BridgeAddr, opts.UserToken)
-	if err != nil {
-		panic(err)
-	}
-	//bridge = bridge.Login(opts.UserToken)
+
 	lights, groups, err := getLightsAndRoomsFromOpts(bridge, opts)
+	if err != nil {
+		log.Fatalf("error retrieving lights from options: %v", err)
+	} else if len(lights) == 0 && len(groups) == 0 {
+		log.Fatalf("No lights or rooms passed in, lights passed it: %v. groups passed in: %v", strings.Join(opts.Lights, ","), strings.Join(opts.Rooms, ","))
+	}
 
 	enc := json.NewEncoder(os.Stdout)
 	es := events.ReadEvents(ctx, os.Stdin)
 	for e := range es {
 		enc.Encode(e)
-		log.Infow("Trigger alarm for event", "event", e.Summary)
-		TriggerLights(ctx, lights, groups, opts.Color(), 45*time.Second, log)
+		log.Infow("Flashing lights for events", "event", e.Summary)
+		err := TriggerLights(ctx, lights, groups, opts.Color(), 3*time.Minute, log)
+		log.Infow("Ending Flashing lights, restoring to previous state", "event", e.Summary)
+		if err != nil {
+			log.Errorf("Error triggering lights: %v", err)
+		}
 	}
 }
 
@@ -198,19 +211,18 @@ func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light,
 	}
 
 	if len(opts.Rooms) > 0 {
-		ixGroupName := make(map[string]struct{})
-		for _, rName := range opts.Rooms {
-			ixGroupName[rName] = struct{}{}
-		}
 		groups, err := bridge.GetGroups()
 		if err != nil {
 			return resLights, resGroups, err
 		}
-		for _, g := range groups {
-			g := g
-			_, ok := ixGroupName[strings.ToLower(g.Name)]
-			if ok {
-				resGroups = append(resGroups, g)
+		for _, rname := range opts.Rooms {
+		optLoop:
+			for _, g := range groups {
+				g := g
+				if strings.HasPrefix(g.Name, rname) {
+					resGroups = append(resGroups, g)
+				}
+				break optLoop
 			}
 		}
 	}
@@ -219,62 +231,31 @@ func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light,
 }
 
 func TriggerLights(ctx context.Context, lights []huego.Light, rooms []huego.Group, color color.Color, dur time.Duration, log *zap.SugaredLogger) error {
-	prevStateLights := make([]huego.State, len(lights), len(lights))
-	prevStateRooms := make([]huego.State, len(rooms), len(rooms))
-	for i, light := range lights {
-		prevStateLights[i] = *light.State
-		err := light.Col(color)
-		light.Bri(255)
-		if err != nil {
-			log.Errorf("error changing room's color: %v", err)
-		}
-		light.Alert("lselect")
+	// 1. remember state of lights and rooms
+	lights2.HoldStateForLights(lights)
+	lights2.HoldStateForRooms(rooms)
+
+	// 2. pulse light and rooms (the true means pulse the light)
+	lights2.AlertLights(lights, color, true, log)
+	lights2.AlertRooms(rooms, color, true, log)
+
+	select {
+	case <-time.After(15 * time.Second):
+	case <-ctx.Done():
 	}
-	for i, room := range rooms {
-		prevStateRooms[i] = *room.State
-		err := room.Col(color)
-		room.Bri(255)
-		if err != nil {
-			log.Errorf("error changing room's color: %v", err)
-		}
-		room.Alert("lselect")
-	}
+
+	// 3. ensure light and rooms remain at full brightness with the alarm color after pulsing (pulsing can leave lights with low brightness sometimes)
+	lights2.AlertLights(lights, color, false, log)
+	lights2.AlertRooms(rooms, color, false, log)
 
 	select {
 	case <-time.After(dur):
 	case <-ctx.Done():
 	}
 
-	for i, light := range lights {
-		err := light.Alert("none")
-		if err != nil {
-			log.Errorf("could not unset alert mode for light: %v", err)
-		}
-		err = light.SetState(prevStateLights[i])
-		if err != nil {
-			log.Errorf("could not restore light state: %v", err)
-		}
-	}
-	for i, room := range rooms {
-		err := room.Alert("none")
-		if err != nil {
-			log.Errorf("could not unset alert mode for room: %v", err)
-		}
-		prevState := prevStateRooms[i]
-		room.Alert("none")
-		room.State.Alert = "none"
-		switch prevState.ColorMode {
-		case "ct":
-			err = room.Ct(prevState.Ct)
-		case "xy":
-			err = room.Xy(prevState.Xy)
-		case "hs":
-			err = room.Hue(prevState.Hue)
-		}
-		if err != nil {
-			log.Errorf("could not restore room state: %v", err)
-		}
-	}
+	// 4. restore lights
+	lights2.RestoreStateForLights(lights, log)
+	lights2.RestoreStateForRooms(rooms, log)
 
 	return nil
 }

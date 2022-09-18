@@ -6,6 +6,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,7 @@ func getEnvOrDefault(envName, fallback string) string {
 
 type NotificationsQuery struct {
 	Host       string        `url:"-"`
+	Email      string        `url:"email"`
 	Token      string        `url:"token"`
 	Calendar   string        `url:"calendar"`
 	TimeBefore time.Duration `url:"-"`
@@ -40,19 +42,20 @@ func obtainConfig() (*NotificationsQuery, error) {
 	if *token == "" {
 		// TODO handle errors
 		f, _ := os.OpenFile(tokenPath, os.O_RDWR|os.O_CREATE, 0655)
-		defer func() {
-			f.Close()
-			log.Infof("Token written to: %v", tokenPath)
-		}()
+		defer f.Close()
 		all, _ := io.ReadAll(f)
-		t := string(all)
-		if len(t) > 1 {
-			q.Token = t
+		contents := string(all)
+		if len(contents) > 1 {
+			tAndE := strings.Split(contents, "\n")
+			q.Email = tAndE[0]
+			q.Token = tAndE[1]
 		} else {
-			newToken, _ := initiateTokenRequestFlow(q.Host)
-			if len(newToken) > 0 {
-				f.WriteString(newToken)
-				q.Token = newToken
+			email, t, _ := initiateTokenRequestFlow(q.Host)
+			if len(t) > 0 {
+				f.WriteString(fmt.Sprintf("%s\n%s", email, t)) // write email in first line, token in second line
+				log.Infof("Token written to: %v", tokenPath)
+				q.Token = t
+				q.Email = email
 			}
 		}
 
@@ -68,9 +71,10 @@ func obtainConfig() (*NotificationsQuery, error) {
 	return &q, nil
 }
 
-func initiateTokenRequestFlow(host string) (string, error) {
+func initiateTokenRequestFlow(host string) (string, string, error) {
 	fmt.Printf("Please: go to this link: https://%v/auth/google and paste here the token you obtain after signing in and press enter.\n", host)
+	var email string
 	var token string
-	_, err := fmt.Scanln(&token)
-	return token, err
+	_, err := fmt.Scanf("%s %s", &email, &token)
+	return email, token, err
 }

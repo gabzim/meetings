@@ -19,8 +19,10 @@ const (
 )
 
 var (
-	errNoToken     = errors.New("NO_API_TOKEN")
-	errBadDuration = errors.New("BAD_DURATION_PASSED_IN")
+	errNoToken      = errors.New("NO_API_TOKEN")
+	errUserNotFound = errors.New("EMAIl_NOT_FOUND_IN_DB")
+	errTokenInvalid = errors.New("INVALID_TOKEN_FOR_EMAIL")
+	errBadDuration  = errors.New("BAD_DURATION_PASSED_IN")
 )
 
 func connectToWs(q *NotificationsQuery) (*websocket.Conn, error) {
@@ -28,7 +30,15 @@ func connectToWs(q *NotificationsQuery) (*websocket.Conn, error) {
 
 	u := url.URL{Scheme: "wss", Host: q.Host, Path: "/notifications", RawQuery: qs.Encode()}
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	c, res, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if res != nil && res.StatusCode > 300 {
+		switch res.StatusCode {
+		case 404:
+			return c, errUserNotFound
+		case 401:
+			return c, errTokenInvalid
+		}
+	}
 	return c, err
 }
 

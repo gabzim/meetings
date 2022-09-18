@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -154,10 +155,10 @@ func main() {
 	}
 	bridge := huego.New(opts.BridgeAddr, opts.UserToken)
 
-	lights, groups, err := getLightsAndRoomsFromOpts(bridge, opts)
+	lights, err := getLightsAndRoomsFromOpts(bridge, opts)
 	if err != nil {
 		log.Fatalf("error retrieving lights from options: %v", err)
-	} else if len(lights) == 0 && len(groups) == 0 {
+	} else if len(lights) == 0 {
 		log.Fatalf("No lights or rooms passed in, lights passed it: %v. groups passed in: %v", strings.Join(opts.Lights, ","), strings.Join(opts.Rooms, ","))
 	}
 
@@ -166,7 +167,7 @@ func main() {
 	for e := range es {
 		enc.Encode(e)
 		log.Infow("Flashing lights for events", "event", e.Summary)
-		err := TriggerLights(ctx, lights, groups, opts.Color(), 3*time.Minute, log)
+		err := TriggerLights(ctx, lights, opts.Color(), 2*time.Minute, log)
 		log.Infow("Ending Flashing lights, restoring to previous state", "event", e.Summary)
 		if err != nil {
 			log.Errorf("Error triggering lights: %v", err)
@@ -174,23 +175,20 @@ func main() {
 	}
 }
 
-func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light, []huego.Group, error) {
+func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light, error) {
 	// user wants to trigger all lights
+	lights, err := bridge.GetLights()
 	if opts.All {
-		groups, err := bridge.GetGroups()
-		if err != nil {
-			return nil, nil, err
-		}
-		lights, err := bridge.GetLights()
-		if err != nil {
-			return nil, nil, err
-		}
-		return lights, groups, nil
+		return lights, err
 	}
 
-	// user wants to trigger some lights
+	lightsById := make(map[int]huego.Light)
+	for _, light := range lights {
+		lightsById[light.ID] = light
+	}
+
+	// user wants to trigger some (not all) lights
 	resLights := make([]huego.Light, 0)
-	resGroups := make([]huego.Group, 0)
 
 	if len(opts.Lights) > 0 {
 		ixLightName := make(map[string]struct{})
@@ -199,7 +197,7 @@ func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light,
 		}
 		lights, err := bridge.GetLights()
 		if err != nil {
-			return resLights, resGroups, err
+			return resLights, err
 		}
 		for _, l := range lights {
 			l := l
@@ -213,31 +211,35 @@ func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light,
 	if len(opts.Rooms) > 0 {
 		groups, err := bridge.GetGroups()
 		if err != nil {
-			return resLights, resGroups, err
+			return resLights, err
 		}
 		for _, rname := range opts.Rooms {
+			roomName := strings.ToLower(strings.Trim(rname, " "))
 		optLoop:
 			for _, g := range groups {
 				g := g
-				if strings.HasPrefix(g.Name, rname) {
-					resGroups = append(resGroups, g)
+				groupName := strings.ToLower(g.Name)
+				if strings.HasPrefix(groupName, roomName) {
+					for _, idStr := range g.Lights {
+						id, _ := strconv.Atoi(idStr)
+						light := lightsById[id]
+						resLights = append(resLights, light)
+					}
+					break optLoop
 				}
-				break optLoop
 			}
 		}
 	}
 
-	return resLights, resGroups, nil
+	return resLights, nil
 }
 
-func TriggerLights(ctx context.Context, lights []huego.Light, rooms []huego.Group, color color.Color, dur time.Duration, log *zap.SugaredLogger) error {
+func TriggerLights(ctx context.Context, lights []huego.Light, color color.Color, dur time.Duration, log *zap.SugaredLogger) error {
 	// 1. remember state of lights and rooms
 	lights2.HoldStateForLights(lights)
-	lights2.HoldStateForRooms(rooms)
 
 	// 2. pulse light and rooms (the true means pulse the light)
 	lights2.AlertLights(lights, color, true, log)
-	lights2.AlertRooms(rooms, color, true, log)
 
 	select {
 	case <-time.After(15 * time.Second):
@@ -246,7 +248,6 @@ func TriggerLights(ctx context.Context, lights []huego.Light, rooms []huego.Grou
 
 	// 3. ensure light and rooms remain at full brightness with the alarm color after pulsing (pulsing can leave lights with low brightness sometimes)
 	lights2.AlertLights(lights, color, false, log)
-	lights2.AlertRooms(rooms, color, false, log)
 
 	select {
 	case <-time.After(dur):
@@ -255,7 +256,6 @@ func TriggerLights(ctx context.Context, lights []huego.Light, rooms []huego.Grou
 
 	// 4. restore lights
 	lights2.RestoreStateForLights(lights, log)
-	lights2.RestoreStateForRooms(rooms, log)
 
 	return nil
 }

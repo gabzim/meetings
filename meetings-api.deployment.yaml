@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: meetings-api
-          image: registry.digitalocean.com/zimmermann/meetings-api:0.0.6 #<IMAGE>
+          image: registry.digitalocean.com/zimmermann/meetings-api:0.0.7 #<IMAGE>
           ports:
             - containerPort: 8080
               name: http

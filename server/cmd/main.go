@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"net/http"
 	"os"
@@ -63,6 +64,8 @@ func main() {
 	// init controllers
 	authCtrl := auth.NewController(cfg.OauthCfg, authServ, cfg.OauthCfg.RedirectURL)
 	notificationsCtrl := notifications.NewController(notifServ, authServ, logger)
+
+	http.Handle("/metrics", promhttp.Handler())
 
 	// init api
 	http.HandleFunc("/auth/google", authCtrl.Redirect)

@@ -3,6 +3,8 @@ package notifications
 import (
 	"fmt"
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 	"net/http"
 	"time"
@@ -14,6 +16,18 @@ import (
 const (
 	pongWait  = 45 * time.Second
 	writeWait = 20 * time.Second
+)
+
+var (
+	clientsConnected = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "clients_connected",
+		Help: "Number of websocket clients connected to the api",
+	})
+
+	webhooksOn = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "calendar_channels_on",
+		Help: "Number of webhook channels registed with google calendars",
+	})
 )
 
 type Service struct {
@@ -44,6 +58,8 @@ func NewService(logger *zap.SugaredLogger, cfg *oauth2.Config, url string) *Serv
 }
 
 func (s *Service) run() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case c := <-s.register:
@@ -87,6 +103,14 @@ func (s *Service) run() {
 			if isEmpty {
 				delete(s.clients, emailAndCal)
 			}
+		case <-ticker.C:
+			webhooksCount := len(s.clients)
+			webhooksOn.Set(float64(webhooksCount))
+			i := 0
+			for _, wh := range s.clients {
+				i += len(wh.clients)
+			}
+			clientsConnected.Set(float64(i))
 		}
 	}
 }

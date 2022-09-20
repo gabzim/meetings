@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: meetings-api
+  namespace: prometheus
+  labels:
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - meetings-api
+  selector:
+    matchLabels:
+      app: meetings-api
+  endpoints:
+    - port: web

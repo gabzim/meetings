@@ -81,12 +81,14 @@ func (s *Service) run() {
 				twoWeeks := time.Now().Add(14 * 24 * time.Hour)
 				events, err := calServ.Events.List(c.calendarName).MaxResults(2500).SingleEvents(true).TimeMin(time.Now().Format(time.RFC3339)).TimeMax(twoWeeks.Format(time.RFC3339)).Do()
 				if err != nil {
-					s.logger.Errorw("error sending events to recently registerd clients\n", "email", c.t.Email, "calendar", c.calendarName, "id", c.id)
+					s.logger.Errorw("error sending events to recently registerd clients:"+err.Error(), "email", c.t.Email, "calendar", c.calendarName, "id", c.id)
+					return
 				}
 				for _, e := range events.Items {
 					c.SendEvent(e)
 				}
 			}()
+			s.updateCounters()
 		case c := <-s.unregister:
 			s.logger.Infow("unregistering clients\n", "email", c.t.Email, "calendar", c.calendarName, "id", c.id)
 			emailAndCal := c.GetEmailAndCalendar()
@@ -103,16 +105,21 @@ func (s *Service) run() {
 			if isEmpty {
 				delete(s.clients, emailAndCal)
 			}
+			s.updateCounters()
 		case <-ticker.C:
-			webhooksCount := len(s.clients)
-			webhooksOn.Set(float64(webhooksCount))
-			i := 0
-			for _, wh := range s.clients {
-				i += len(wh.clients)
-			}
-			clientsConnected.Set(float64(i))
+			s.updateCounters()
 		}
 	}
+}
+
+func (s *Service) updateCounters() {
+	webhooksCount := len(s.clients)
+	webhooksOn.Set(float64(webhooksCount))
+	i := 0
+	for _, wh := range s.clients {
+		i += len(wh.clients)
+	}
+	clientsConnected.Set(float64(i))
 }
 
 // RegisterClient Register a clients to receive event notifications, returns an id of the clients

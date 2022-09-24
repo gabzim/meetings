@@ -3,8 +3,10 @@ package main
 import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gabzim/meetings/server/postgres"
 	"github.com/gabzim/meetings/server/services/auth"
@@ -47,7 +49,11 @@ func getServerConfig() *ServerConfig {
 
 func main() {
 	cfg := getServerConfig()
-	log, _ := zap.NewProduction()
+
+	loggerConfig := zap.NewProductionConfig()
+	loggerConfig.EncoderConfig.TimeKey = "timestamp"
+	loggerConfig.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout(time.RFC3339)
+	log, _ := loggerConfig.Build()
 	logger := log.Sugar()
 
 	// init data layer

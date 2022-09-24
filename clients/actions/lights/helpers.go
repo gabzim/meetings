@@ -25,10 +25,10 @@ func RestoreStateForLights(lights []huego.Light, log *zap.SugaredLogger) {
 		err = light.SetState(prevStateLights[light.ID])
 		if err != nil {
 			log.Errorf("could not restore light state: %v, retrying...", err)
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(5 * time.Second)
 			light.SetState(prevStateLights[light.ID])
 		}
-		time.Sleep(80 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

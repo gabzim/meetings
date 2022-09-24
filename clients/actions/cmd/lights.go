@@ -164,10 +164,11 @@ func main() {
 
 	enc := json.NewEncoder(os.Stdout)
 	es := events.ReadEvents(ctx, os.Stdin)
+
 	for e := range es {
 		enc.Encode(e)
 		log.Infow("Flashing lights for events", "event", e.Summary)
-		err := TriggerLights(ctx, lights, opts.Color(), 2*time.Minute, log)
+		TriggerLights(ctx, bridge, lights, opts.Color(), 2*time.Minute, log)
 		log.Infow("Ending Flashing lights, restoring to previous state", "event", e.Summary)
 		if err != nil {
 			log.Errorf("Error triggering lights: %v", err)
@@ -234,7 +235,33 @@ func getLightsAndRoomsFromOpts(bridge *huego.Bridge, opts *Opts) ([]huego.Light,
 	return resLights, nil
 }
 
-func TriggerLights(ctx context.Context, lights []huego.Light, color color.Color, dur time.Duration, log *zap.SugaredLogger) error {
+func RefreshLights(bridge *huego.Bridge, lights []huego.Light) ([]huego.Light, error) {
+	refreshed := make([]huego.Light, 0)
+	allLights, err := bridge.GetLights()
+	if err != nil {
+		return refreshed, err
+	}
+
+	allLightsById := make(map[int]*huego.Light)
+	for _, l := range allLights {
+		l := l
+		allLightsById[l.ID] = &l
+	}
+
+	for _, l := range lights {
+		refreshedLight, ok := allLightsById[l.ID]
+		if ok {
+			refreshed = append(refreshed, *refreshedLight)
+		}
+	}
+	return refreshed, nil
+}
+
+func TriggerLights(ctx context.Context, bridge *huego.Bridge, lightList []huego.Light, color color.Color, dur time.Duration, log *zap.SugaredLogger) error {
+	lights, err := RefreshLights(bridge, lightList)
+	if err != nil {
+		return err
+	}
 	// 1. remember state of lights and rooms
 	lights2.HoldStateForLights(lights)
 
